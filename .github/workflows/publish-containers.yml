@@ -1,0 +1,399 @@
+---
+# SPDX-License-Identifier: Apache-2.0
+#
+# Copyright (c) 2022 Patrick Dung
+
+name: Build containers
+on:
+  push:
+    branches:
+      - main
+    # paths:
+    #  - 'release-versions/*'
+env:
+  CARGO_TERM_COLOR: always
+  # CONTAINER_REGISTRY: quay.io
+  CONTAINER_REGISTRY: ghcr.io
+  # ## GH Repository must be lower case, when using in GH action
+  CONTAINER_REPOSITORY: ${{ github.repository }}
+  ORIGINAL_SOURCECODE_URL: https://github.com/prometheus/prometheus
+jobs:
+  init-env:
+    name: Set env outputs
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      actions: none
+      checks: none
+      contents: none
+      deployments: none
+      issues: none
+      packages: none
+      pull-requests: none
+      repository-projects: none
+      security-events: none
+      statuses: none
+      # id-token: write # needed for signing the images with GitHub OIDC **not production ready**
+    outputs:
+      container_registry_base_uri: ${{ steps.set-env.outputs.container_registry_base_uri }}
+    steps:
+      - name: Set env for later jobs
+        id: set-env
+        run: |
+          echo "container_registry_base_uri=$(echo $CONTAINER_REGISTRY/$(echo $CONTAINER_REPOSITORY | tr 'A-Z' 'a-z'))" >> $GITHUB_OUTPUT
+
+  build-docker-image:
+    needs: [init-env]
+    name: Build Docker Images
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      actions: none
+      checks: none
+      contents: read
+      deployments: none
+      issues: none
+      packages: write
+      pull-requests: none
+      repository-projects: none
+      # GH action/scanners for sarif reports
+      security-events: write
+      statuses: none
+      # id-token: 'read'
+    outputs:
+      remote_branch_name: ${{ steps.get-remote-branch-name.outputs.remote_branch_name }}
+      container_digest_amd64: ${{ steps.get-container-digest-amd64.outputs.container_digest }}
+      container_digest_arm64: ${{ steps.get-container-digest-arm64.outputs.container_digest }}
+    steps:
+      - name: Get branch name (tag) of latest release from official repo
+        id: get-remote-branch-name
+        run: |
+          curl -sL https://api.github.com/repos/prometheus/prometheus/releases | \
+            jq -r ".[].tag_name" | grep -v rc | sort -r -V | head -n 1 > /tmp/prometheus-latest-branch-name
+          echo "REMOTE_BRANCH_NAME=$(cat /tmp/prometheus-latest-branch-name)" >> $GITHUB_ENV
+          echo "remote_branch_name=$(cat /tmp/prometheus-latest-branch-name)" >> $GITHUB_OUTPUT
+      - name: Checkout this repository (to get Dockerfile for building)
+        uses: actions/checkout@v2
+        with:
+          ref: main
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v1
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v1
+      - name: Login to Registry provider
+        uses: docker/login-action@v1
+        with:
+          registry: ${{ env.CONTAINER_REGISTRY }}
+          # Quay.io
+          # username: ${{ secrets.QUAY_USERNAME }}
+          # password: ${{ secrets.QUAY_TOKEN }}
+          # GitHub
+          username: ${{ github.actor }}
+          password: ${{ secrets.PUBLISH_TOKEN }}
+      - name: Install Cosign GH action
+        uses: sigstore/cosign-installer@main
+        # with:
+        #  cosign-release: 'v1.4.1'
+      - name: Build and push to container registry
+        uses: docker/build-push-action@v2
+        with:
+          context: .
+          file: ./Dockerfile
+          build-args: |
+            ##  ARCH=${{ env.TO_BE_FIXED }}
+            RELEASE_VERSION=${{ env.REMOTE_BRANCH_NAME }}
+            LABEL_IMAGE_URL=${{ env.ORIGINAL_SOURCECODE_URL }}
+            LABEL_IMAGE_SOURCE=https://github.com/${{ github.repository }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ needs.init-env.outputs.container_registry_base_uri }}:${{ env.REMOTE_BRANCH_NAME }}
+
+      - name: "Get the digest of container (amd64)"
+        id: get-container-digest-amd64
+        run: |
+          skopeo inspect --raw docker://${{needs.init-env.outputs.container_registry_base_uri}}:${{env.REMOTE_BRANCH_NAME}} | \
+            jq -r '.manifests[] | select(.platform .architecture=="amd64" and .platform .os=="linux") | .digest' > /tmp/container-digest-amd64
+          echo "container_digest=$(cat /tmp/container-digest-amd64)" >> $GITHUB_OUTPUT
+
+      - name: "Get the digest of container (arm64)"
+        id: get-container-digest-arm64
+        run: |
+          skopeo inspect --raw docker://${{needs.init-env.outputs.container_registry_base_uri}}:${{env.REMOTE_BRANCH_NAME}} | \
+            jq -r '.manifests[] | select(.platform .architecture=="arm64" and .platform .os=="linux") | .digest' > /tmp/container-digest-arm64
+          echo "container_digest=$(cat /tmp/container-digest-arm64)" >> $GITHUB_OUTPUT
+
+      - name: Use Cosign to sign the image recursively
+        run: |
+          echo -n "${{ secrets.COSIGN_PRIVATE_KEY_PASSWORD }}" | \
+            cosign sign --recursive --key <(echo -n "${{ secrets.COSIGN_PRIVATE_KEY }}") \
+            "${{ needs.init-env.outputs.container_registry_base_uri }}:${{ env.REMOTE_BRANCH_NAME }}"
+
+  build-sbom-and-scanning:
+    needs: [init-env, build-docker-image]
+    name: Build SBOM and image scanning
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      actions: none
+      checks: none
+      contents: read
+      deployments: none
+      issues: none
+      packages: write
+      pull-requests: none
+      repository-projects: none
+      # GH action/scanners for sarif reports
+      security-events: write
+      statuses: none
+      # id-token: 'read'
+      # id-token: write # needed for signing the images with GitHub OIDC **not production ready**
+    strategy:
+      # Anchore action produce the same filename for sarif on different platform
+      max-parallel: 1
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform_image_uri: "${{needs.init-env.outputs.container_registry_base_uri}}@${{ needs.build-docker-image.outputs.container_digest_amd64 }}"
+          - arch: arm64
+            platform_image_uri: "${{needs.init-env.outputs.container_registry_base_uri}}@${{ needs.build-docker-image.outputs.container_digest_arm64 }}"
+    steps:
+      - name: Set env REMOTE_BRANCH_NAME
+        run: |
+          echo "REMOTE_BRANCH_NAME=${{ needs.build-docker-image.outputs.remote_branch_name }}" >> $GITHUB_ENV
+
+      - name: Checkout this repository
+        # some vuln scanner want to have the Dockerfile
+        uses: actions/checkout@v2
+        with:
+          ref: main
+
+      - name: Login to Registry provider
+        uses: docker/login-action@v1
+        with:
+          registry: ${{ env.CONTAINER_REGISTRY }}
+          # Quay.io
+          # username: ${{ secrets.QUAY_USERNAME }}
+          # password: ${{ secrets.QUAY_TOKEN }}
+          # GitHub
+          username: ${{ github.actor }}
+          password: ${{ secrets.PUBLISH_TOKEN }}
+
+      - name: Install Cosign GH action
+        uses: sigstore/cosign-installer@main
+        # with:
+        #  cosign-release: 'v1.4.1'
+
+      - name: "Fetch branch name of latest release versions Other software"
+        run: |
+          curl -sL https://api.github.com/repos/anchore/syft/releases | \
+            jq -r ".[].tag_name" | grep -v rc | sort -r -V | head -n 1 | sed -E 's|^v||' > /tmp/syft-latest-branch-name
+          echo "SYFT_VERSION=$(cat /tmp/syft-latest-branch-name)" >> $GITHUB_ENV
+          curl -sL https://api.github.com/repos/anchore/grype/releases | \
+            jq -r ".[].tag_name" | grep -v rc | sort -r -V | head -n 1 | sed -E 's|^v||' > /tmp/grype-latest-branch-name
+          echo "GRYPE_VERSION=$(cat /tmp/grype-latest-branch-name)" >> $GITHUB_ENV
+
+      - name: Install Syft
+        run: |
+          cd /tmp
+          curl -L -O -v https://github.com/anchore/syft/releases/download/v${{env.SYFT_VERSION}}/syft_${{env.SYFT_VERSION}}_linux_amd64.deb
+          curl -L -O -v https://github.com/anchore/syft/releases/download/v${{env.SYFT_VERSION}}/syft_${{env.SYFT_VERSION}}_checksums.txt
+          sha256sum -c syft_${{env.SYFT_VERSION}}_checksums.txt --ignore-missing
+          sudo dpkg -i syft_${{env.SYFT_VERSION}}_linux_amd64.deb
+
+      - name: Set the SBOM env variable for use by later steps
+        run: |
+          echo "ANCHORE_SBOM_ACTION_PRIOR_ARTIFACT=container-sbom.json" >> $GITHUB_ENV
+
+      - name: Use Syft to generate the SBOM files
+        run: |
+          syft -v ${{matrix.platform_image_uri}} -o json > ./${{matrix.arch}}-${{env.ANCHORE_SBOM_ACTION_PRIOR_ARTIFACT}}
+
+      - name: Upload SBOM files to release
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.PUBLISH_TOKEN }}
+          file: ./*${{env.ANCHORE_SBOM_ACTION_PRIOR_ARTIFACT}}
+          file_glob: true
+          tag: ${{ env.REMOTE_BRANCH_NAME }}
+          overwrite: true
+
+      # Cannot download if it's not generated as artifact
+      # - name: Download the container SBOM artifact
+      #  uses: actions/download-artifact@v2
+      #  with:
+      #    #name: container-sbom.spdx.json
+      #    name: ${{env.ANCHORE_SBOM_ACTION_PRIOR_ARTIFACT}}
+
+      - name: Create SBOM attestation
+        run: |
+          # Create SBOM attestation and push it to the container registry
+          echo -n "${{ secrets.COSIGN_PRIVATE_KEY_PASSWORD }}" | \
+            cosign attest --predicate "${{matrix.arch}}-${{env.ANCHORE_SBOM_ACTION_PRIOR_ARTIFACT}}" \
+            --key <(echo -n "${{ secrets.COSIGN_PRIVATE_KEY }}") \
+            "${{ matrix.platform_image_uri }}"
+
+      - name: Install Grype
+        run: |
+          cd /tmp
+          curl -L -O -v https://github.com/anchore/grype/releases/download/v${{env.GRYPE_VERSION}}/grype_${{env.GRYPE_VERSION}}_linux_amd64.deb
+          curl -L -O -v https://github.com/anchore/grype/releases/download/v${{env.GRYPE_VERSION}}/grype_${{env.GRYPE_VERSION}}_checksums.txt
+          sha256sum -c grype_${{env.GRYPE_VERSION}}_checksums.txt --ignore-missing
+          sudo dpkg -i grype_${{env.GRYPE_VERSION}}_linux_amd64.deb
+
+      - name: Scan container by Grype
+        run: |
+          # May set a severity threshold for failing the build
+          grype sbom:./${{matrix.arch}}-${{env.ANCHORE_SBOM_ACTION_PRIOR_ARTIFACT}} -o json > ./${{matrix.arch}}-container-vulnerabilities-report-grype.json
+          grype sbom:./${{matrix.arch}}-${{env.ANCHORE_SBOM_ACTION_PRIOR_ARTIFACT}} -o table > ./${{matrix.arch}}-container-vulnerabilities-report-grype-table.txt
+
+      - name: Upload Grype reports to artifacts
+        uses: actions/upload-artifact@v2
+        with:
+          path: ./*vulnerabilities-report-grype*
+          name: "Vulnerabilities reports by Grype"
+
+      - name: Upload Grype reports to release
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.PUBLISH_TOKEN }}
+          file: ./*vulnerabilities-report-grype*
+          file_glob: true
+          tag: ${{ env.REMOTE_BRANCH_NAME }}
+          overwrite: true
+
+      - name: Scan container with Trivy
+        uses: aquasecurity/trivy-action@master
+        id: scan-by-trivy
+        with:
+          image-ref: '${{matrix.platform_image_uri}}'
+          format: 'template'
+          template: '@/contrib/sarif.tpl'
+          output: '${{matrix.arch}}-container-trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+
+      - name: Upload Trivy SARIF report to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: '${{matrix.arch}}-container-trivy-results.sarif'
+          category: trivy-${{matrix.arch}}
+
+      - name: Scan container by Anchore
+        uses: anchore/scan-action@v3
+        # ## id: scan-by-anchore-${{matrix.arch}}
+        id: scan-by-anchore
+        with:
+          fail-build: false
+          image: "${{matrix.platform_image_uri}}"
+          acs-report-enable: true
+
+      - name: Rename results.sarif with architecture name
+        run: |
+          mv results.sarif ${{matrix.arch}}-container-anchore-results.sarif
+
+      - name: Upload Anchore SARIF report to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          # the steps outputs would contain './'
+          # ##sarif_file: ${{matrix.arch}}-${{ steps.scan-by-anchore-${{matrix.arch}}.outputs.sarif }}
+          # sarif_file: anchore-${{matrix.arch}}-${{ steps.scan-by-anchore.outputs.sarif }}
+          sarif_file: ./${{matrix.arch}}-container-anchore-results.sarif
+          category: anchore-${{matrix.arch}}
+
+      - name: Scan container by Snyk
+        continue-on-error: true
+        uses: snyk/actions/docker@master
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_API_TOKEN }}
+        with:
+          image: ${{matrix.platform_image_uri}}
+          args: --file=Dockerfile
+
+      - name: Rename results.sarif with architecture name
+        run: |
+          mv snyk.sarif ${{matrix.arch}}-container-snyk-results.sarif
+
+      - name: Upload result to GitHub Code Scanning security tab
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: ${{matrix.arch}}-container-snyk-results.sarif
+
+#      - name: Sysdig Secure Inline Scan
+#        id: scan
+#        uses: sysdiglabs/scan-action@v3
+#        with:
+#          # Tag of the image to analyse
+#          image-tag: "${{matrix.platform_image_uri}}"
+#          sysdig-secure-token: ${{ secrets.SYSDIG_SECURE_TOKEN}}
+#          # Sysdig secure endpoint. Please read: https://docs.sysdig.com/en/docs/administration/saas-regions-and-ip-ranges/
+#          sysdig-secure-url: https://app.au1.sysdig.com
+#          dockerfile-path: ./Dockerfile
+#          input-type: docker-daemon
+#          ignore-failed-scan: true
+#          # Sysdig inline scanner requires privileged rights
+#          run-as-user: root
+#
+#      - name: Rename Sysdig sarif with architecture name
+#        run: |
+#          mv ${{ steps.scan.outputs.sarifReport }} ${{matrix.arch}}-container-sysdig-results.sarif
+#
+#      - name: Upload Sysdig SARIF report to GitHub Security tab
+#        uses: github/codeql-action/upload-sarif@v2
+#        if: always()
+#        with:
+#          sarif_file: '${{matrix.arch}}-container-sysdig-results.sarif'
+#          category: sysdig-${{matrix.arch}}
+
+      # - name: Inspect SARIF report(s)
+      #  run: |
+      #    echo ${{matrix.arch}}
+      #    cat ${{matrix.arch}}-container-trivy-results.sarif
+      #    cat ${{matrix.arch}}-container-anchore-results.sarif
+
+      - name: Upload SARIF reports to artifacts
+        uses: actions/upload-artifact@v2
+        with:
+          name: "SARIF reports when containers are built"
+          path: |
+            # #${{matrix.arch}}-trivy-results.sarif
+            # #${{ steps.scan-by-anchore.outputs.sarif }}
+            ./*.sarif
+
+  build-tag-latest:
+    needs: [init-env, build-docker-image, build-sbom-and-scanning]
+    name: Tag the latest containers
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      actions: none
+      checks: none
+      contents: none
+      deployments: none
+      issues: none
+      packages: none
+      pull-requests: none
+      repository-projects: none
+      security-events: none
+      statuses: none
+      # id-token: 'read'
+    steps:
+      - name: Set env REMOTE_BRANCH_NAME
+        run: |
+          echo "REMOTE_BRANCH_NAME=${{ needs.build-docker-image.outputs.remote_branch_name }}" >> $GITHUB_ENV
+      - name: Login to Registry provider
+        uses: docker/login-action@v1
+        with:
+          registry: ${{ env.CONTAINER_REGISTRY }}
+          # Quay.io
+          # username: ${{ secrets.QUAY_USERNAME }}
+          # password: ${{ secrets.QUAY_TOKEN }}
+          # GitHub
+          username: ${{ github.actor }}
+          password: ${{ secrets.PUBLISH_TOKEN }}
+      - name: Add the latest tag to the container image
+        run: |
+          skopeo copy --all docker://${{needs.init-env.outputs.container_registry_base_uri}}:${{env.REMOTE_BRANCH_NAME}} docker://${{needs.init-env.outputs.container_registry_base_uri}}:latest

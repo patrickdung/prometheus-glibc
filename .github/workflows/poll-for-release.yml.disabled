@@ -1,0 +1,46 @@
+---
+# SPDX-License-Identifier: Apache-2.0
+#
+# Copyright (c) 2022 Patrick Dung
+
+name: Poll official repo to get the latest release version
+on:
+  schedule:
+    - cron: '28 1 * * *'
+jobs:
+  get-version:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch branch name of latest version
+        run: |
+          curl -sL https://api.github.com/repos/prometheus/prometheus/releases | \
+            jq -r ".[].tag_name" | grep -v rc | sort -r -V | head -n 1 > /tmp/prometheus-latest-branch-name
+          echo "REMOTE_BRANCH_NAME=$(cat /tmp/prometheus-latest-branch-name)" >> $GITHUB_ENV
+          curl -sL https://github.com/patrickdung/prometheus-glibc/raw/main/release-versions/prometheus-latest.txt -o /tmp/prometheus-local-branch-name
+          echo "LOCAL_BRANCH_NAME=$(cat /tmp/prometheus-local-branch-name)" >> $GITHUB_ENV
+          if [ $(cat /tmp/prometheus-latest-branch-name) == "null" ] || [ $(cat /tmp/prometheus-latest-branch-name) == null ] || [ $(cat /tmp/prometheus-latest-branch-name) == "" ] || [ -z /tmp/prometheus-latest-branch-name ] ; then exit 1 ; else echo "Remote Branch Name is not null"; fi
+      - name: Check for modified files
+        id: git-check
+        run: |
+          echo modified=$( if [ "${{ env.REMOTE_BRANCH_NAME}}" != "null" ] && [ "${{ env.REMOTE_BRANCH_NAME }}" != "${{ env.LOCAL_BRANCH_NAME }}" ]; then echo "true"; else echo "false"; fi ) >> $GITHUB_OUTPUT
+      - uses: actions/checkout@v2
+        with:
+          # https://github.community/t/push-from-action-even-with-pat-does-not-trigger-action/17622/5
+          persist-credentials: false
+      - name: Commit latest release version
+        if: steps.git-check.outputs.modified == 'true'
+        run: |
+          git config --global user.name 'Patrick Dung'
+          git config --global user.email '38665827+patrickdung@users.noreply.github.com'
+          #git branch ${{ env.REMOTE_BRANCH_NAME }}
+          #git switch ${{ env.REMOTE_BRANCH_NAME }}
+          echo ${{ env.REMOTE_BRANCH_NAME }} > release-versions/prometheus-latest.txt
+          git commit -am "New release version ${{ env.REMOTE_BRANCH_NAME }}"
+          ## By default GH actions push cannot trigger another GH action
+          ##git push
+      - name: Push changes
+        if: steps.git-check.outputs.modified == 'true'
+        uses: ad-m/github-push-action@master
+        with:
+          repository: patrickdung/prometheus-glibc
+          github_token: ${{ secrets.PUBLISH_TOKEN }}
