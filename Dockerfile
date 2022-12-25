@@ -1,8 +1,5 @@
 # SPDX-License-Identifier: MIT
 
-ARG PROM_VERSION="2.40.7"
-ARG CHECKSUM="83b4e891204500fc798b5a9e86d0189cbef7f8274c3303c215da5e2c75df6cde"
-
 # bullseye npm & nodejs is too old
 # https://github.com/prometheus/prometheus/issues/11724
 #FROM docker.io/golang:1.19-bullseye AS build
@@ -14,6 +11,9 @@ FROM registry.access.redhat.com/ubi9/go-toolset:1.18.4-11.1669637104 AS build
 
 # no 'npm tar yarn (and golang)'
 #FROM cgr.dev/chainguard/wolfi-base:latest AS build
+
+ARG PROM_VERSION="2.40.7"
+ARG CHECKSUM="83b4e891204500fc798b5a9e86d0189cbef7f8274c3303c215da5e2c75df6cde"
 
 ADD https://github.com/prometheus/prometheus/archive/v$PROM_VERSION.tar.gz /tmp/prometheus.tar.gz
 
