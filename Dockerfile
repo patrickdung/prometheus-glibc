@@ -12,6 +12,10 @@ FROM registry.access.redhat.com/ubi9/go-toolset:1.18.4-11.1669637104 AS build
 # no 'npm tar yarn (and golang)'
 #FROM cgr.dev/chainguard/wolfi-base:latest AS build
 
+
+ARG ARCH
+## With Docker's buildx, TARGETARCH gives out amd64/arm64
+
 ARG PROM_VERSION="2.40.7"
 ARG CHECKSUM="83b4e891204500fc798b5a9e86d0189cbef7f8274c3303c215da5e2c75df6cde"
 
@@ -69,6 +73,12 @@ RUN set -eux && \
 FROM cgr.dev/chainguard/busybox:latest-glibc
 
 #FROM docker.io/bitnami/minideb:bullseye
+
+ARG LABEL_IMAGE_URL
+ARG LABEL_IMAGE_SOURCE
+
+LABEL org.opencontainers.image.url=${LABEL_IMAGE_URL}
+LABEL org.opencontainers.image.source=${LABEL_IMAGE_SOURCE}
 
 USER 0
 WORKDIR /prometheus
