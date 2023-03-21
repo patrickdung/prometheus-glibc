@@ -68,9 +68,9 @@ jobs:
       - name: Get branch name (tag) of latest release from official repo
         id: get-remote-branch-name
         run: |
-          # replacing + by _
+          # replacing + by -
           curl -sL https://api.github.com/repos/prometheus/prometheus/releases | \
-            jq -r ".[].tag_name" | grep -v rc | sort -r -V | head -n 1 | sed -E 's|\+|_|g' > /tmp/prometheus-latest-branch-name
+            jq -r ".[].tag_name" | grep -v rc | sort -r -V | head -n 1 | sed -E 's|\+|-|g' > /tmp/prometheus-latest-branch-name
           echo "REMOTE_BRANCH_NAME=$(cat /tmp/prometheus-latest-branch-name)" >> $GITHUB_ENV
           echo "remote_branch_name=$(cat /tmp/prometheus-latest-branch-name)" >> $GITHUB_OUTPUT
       - name: Checkout this repository (to get Dockerfile for building)

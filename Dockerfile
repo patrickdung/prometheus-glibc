@@ -4,7 +4,7 @@
 # https://github.com/prometheus/prometheus/issues/11724
 #FROM docker.io/golang:1.19-bullseye AS build
 
-FROM registry.access.redhat.com/ubi9/go-toolset:1.18.9-2.1674497385 AS build
+FROM registry.access.redhat.com/ubi9/go-toolset:1.18.9-14 AS build
 
 # no apk
 #FROM cgr.dev/chainguard/go:latest-glibc AS build
