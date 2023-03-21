@@ -38,7 +38,7 @@ RUN set -eux && \
       -y install --repo yarn yarn && \
     tar -C /tmp -xf /tmp/prometheus.tar.gz && \
     mkdir -p /go/src/github.com/prometheus && \
-    mv /tmp/prometheus-$PROM_VERSION /go/src/github.com/prometheus/prometheus && \
+    mv /tmp/prometheus-${PROM_VERSION//+/-} /go/src/github.com/prometheus/prometheus && \
     cd /go/src/github.com/prometheus/prometheus && \
       make build && \
     dnf --nodocs --setopt=install_weak_deps=0 --setopt=keepcache=0 \
