@@ -39,6 +39,7 @@ RUN set -eux && \
     mkdir -p /go/src/github.com/prometheus && \
     mv /tmp/prometheus-${PROM_VERSION//+/-} /go/src/github.com/prometheus/prometheus && \
     cd /go/src/github.com/prometheus/prometheus && \
+      yarn config set networkTimeout 3000000 && \
       make build && \
     dnf --nodocs --setopt=install_weak_deps=0 --setopt=keepcache=0 \
       -y install https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm && \
