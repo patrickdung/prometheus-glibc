@@ -4,7 +4,7 @@
 # https://github.com/prometheus/prometheus/issues/11724
 #FROM docker.io/golang:1.19-bullseye AS build
 
-FROM registry.access.redhat.com/ubi9/go-toolset:1.20.10-6 AS build
+FROM registry.access.redhat.com/ubi9/go-toolset:1.20.10-11 AS build
 
 # no apk
 #FROM cgr.dev/chainguard/go:latest-glibc AS build
@@ -15,8 +15,8 @@ FROM registry.access.redhat.com/ubi9/go-toolset:1.20.10-6 AS build
 ARG ARCH
 ## With Docker's buildx, TARGETARCH gives out amd64/arm64
 
-ARG PROM_VERSION="2.49.1"
-ARG CHECKSUM="985d7f45ed3d16e23a30eae490c17911518fae96cba0245d493eb07097a10b3b"
+ARG PROM_VERSION="2.50.1"
+ARG CHECKSUM="30490dd086013954f9926c4f3789243deae2b23b3e95b32e2e69b039066f669f"
 
 ADD https://github.com/prometheus/prometheus/archive/v$PROM_VERSION.tar.gz /tmp/prometheus.tar.gz
 
