@@ -15,8 +15,8 @@ FROM registry.access.redhat.com/ubi9/go-toolset:1.20.10-11 AS build
 ARG ARCH
 ## With Docker's buildx, TARGETARCH gives out amd64/arm64
 
-ARG PROM_VERSION="2.50.1"
-ARG CHECKSUM="30490dd086013954f9926c4f3789243deae2b23b3e95b32e2e69b039066f669f"
+ARG PROM_VERSION="2.51.1"
+ARG CHECKSUM="6c6230db958bd22775bbfaa6a3db1e1cefa411ded6495fe93873b754945cc748"
 
 ADD https://github.com/prometheus/prometheus/archive/v$PROM_VERSION.tar.gz /tmp/prometheus.tar.gz
 
