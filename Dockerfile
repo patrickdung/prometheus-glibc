@@ -15,6 +15,7 @@ FROM registry.access.redhat.com/ubi9/go-toolset:1.21.13-2.1729155367 AS build
 ARG ARCH
 ## With Docker's buildx, TARGETARCH gives out amd64/arm64
 
+# 2.55.0 needs golang 1.22
 ARG PROM_VERSION="2.55.0"
 ARG CHECKSUM="ab1b5902627f20643e158f7f51764baf2ae550ae9e2106dff1cd17ebc59ebc91"
 
