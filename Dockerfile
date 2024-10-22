@@ -4,7 +4,8 @@
 # https://github.com/prometheus/prometheus/issues/11724
 #FROM docker.io/golang:1.19-bullseye AS build
 
-FROM registry.access.redhat.com/ubi9/go-toolset:1.21.13-2.1729155367 AS build
+# FROM registry.access.redhat.com/ubi9/go-toolset:1.21.13-2.1729155367 AS build
+FROM quay.io/fedora/fedora:41 AS build
 
 # no apk
 #FROM cgr.dev/chainguard/go:latest-glibc AS build
@@ -32,20 +33,14 @@ ENV CGO_ENABLED=0
 RUN set -eux && \
     ls -la /tmp && \
     [ "$(sha256sum /tmp/prometheus.tar.gz | awk '{print $1}')" = "$CHECKSUM" ] && \
-    curl --silent --location https://dl.yarnpkg.com/rpm/yarn.repo | tee /etc/yum.repos.d/yarn.repo && \
-    rpm --import https://dl.yarnpkg.com/rpm/pubkey.gpg && \
     dnf --nodocs --setopt=install_weak_deps=0 --setopt=keepcache=0 \
-      -y install --repo yarn yarn && \
+      -y install yarnpkg nodejs-npm golang make git-core jemalloc openssl ca-certificates && \
     tar -C /tmp -xf /tmp/prometheus.tar.gz && \
     mkdir -p /go/src/github.com/prometheus && \
     mv /tmp/prometheus-${PROM_VERSION//+/-} /go/src/github.com/prometheus/prometheus && \
     cd /go/src/github.com/prometheus/prometheus && \
       yarn config set networkTimeout 3000000 && \
-      make build && \
-    dnf --nodocs --setopt=install_weak_deps=0 --setopt=keepcache=0 \
-      -y install https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm && \
-    dnf --nodocs --setopt=install_weak_deps=0 --setopt=keepcache=0 \
-      -y install --repo epel jemalloc
+      make build
 
 RUN set -eux && \
     mkdir -p /rootfs/etc/prometheus && \
