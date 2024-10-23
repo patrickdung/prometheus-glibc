@@ -1,5 +1,7 @@
-This is an unofficial repo is to build [Prometheus](https://github.com/prometheus/prometheus)
-with glibc and jemalloc support.
+This is an unofficial repo is to build [Prometheus](https://github.com/prometheus/prometheus) with glibc and jemalloc support.
+
+**I used two AI two review the settings, both AI said jemalloc would not be used.**
+**So I would stop updating this repo.**
 
 This repo is for building unofficial Docker images (mainly ARMv8) **for my own use**.
 Please use the official binary from Prometheus.
